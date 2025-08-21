@@ -179,6 +179,8 @@ Propriedades aplicadas:
     
     // Extrair atribuições de variáveis do script
     const scriptVariables: { [key: string]: string } = {};
+    
+    // Processar atribuições simples
     const assignmentMatches = processedScript.match(/\$(\w+)\s*=\s*"([^"]*)"/g);
     if (assignmentMatches) {
       assignmentMatches.forEach(match => {
@@ -188,6 +190,45 @@ Propriedades aplicadas:
         }
       });
     }
+    
+    // Processar comandos complexos como geração de senhas
+    const lines = processedScript.split('\n');
+    lines.forEach((line, index) => {
+      line = line.trim();
+      
+      // Detectar geração de senha aleatória
+      if (line.includes('-join') && line.includes('Get-Random') && line.includes('ForEach-Object')) {
+        const varMatch = line.match(/\$(\w+)\s*=/);
+        if (varMatch) {
+          const varName = varMatch[1];
+          
+          // Extrair o tamanho da senha
+          let length = 8; // padrão
+          const lengthMatch = processedScript.match(/\$length\s*=\s*(\d+)/);
+          if (lengthMatch) {
+            length = parseInt(lengthMatch[1]);
+          }
+          
+          // Gerar senha aleatória simulada
+          const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.!@#$%&*-_+=';
+          let randomPassword = '';
+          for (let i = 0; i < length; i++) {
+            randomPassword += chars[Math.floor(Math.random() * chars.length)];
+          }
+          
+          scriptVariables[varName] = randomPassword;
+        }
+      }
+      
+      // Processar outras atribuições com comandos
+      else if (line.includes('Get-Random') && line.includes('$')) {
+        const varMatch = line.match(/\$(\w+)\s*=/);
+        if (varMatch) {
+          const varName = varMatch[1];
+          scriptVariables[varName] = Math.floor(Math.random() * 1000).toString();
+        }
+      }
+    });
     
     // Simular saída dos comandos Write-Host
     let output = '';
