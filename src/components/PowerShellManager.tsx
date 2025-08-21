@@ -169,32 +169,59 @@ Propriedades aplicadas:
 - Status: Ativo`;
     }
     
-    // Para scripts de senha
-    if (script.content.includes('$Senha') || script.content.includes('senha')) {
-      const senha = variables.find(v => v.name === 'Senha')?.value;
-      if (senha) {
-        return `Senha: ${senha}`;
-      }
+    let processedScript = script.content;
+    
+    // Substituir variáveis dinâmicas pelos valores fornecidos
+    variables.forEach(variable => {
+      const regex = new RegExp(`\\$\\(${variable.name}\\)`, 'g');
+      processedScript = processedScript.replace(regex, variable.value);
+    });
+    
+    // Extrair atribuições de variáveis do script
+    const scriptVariables: { [key: string]: string } = {};
+    const assignmentMatches = processedScript.match(/\$(\w+)\s*=\s*"([^"]*)"/g);
+    if (assignmentMatches) {
+      assignmentMatches.forEach(match => {
+        const [, varName, varValue] = match.match(/\$(\w+)\s*=\s*"([^"]*)"/) || [];
+        if (varName && varValue !== undefined) {
+          scriptVariables[varName] = varValue;
+        }
+      });
     }
     
-    // Simular saída baseada no conteúdo do script
+    // Simular saída dos comandos Write-Host
     let output = '';
-    if (script.content.includes('Write-Host')) {
-      // Extrair e simular comandos Write-Host
-      const writeHostMatches = script.content.match(/Write-Host\s+"([^"]+)"/g);
-      if (writeHostMatches) {
-        writeHostMatches.forEach(match => {
-          let message = match.replace(/Write-Host\s+"/, '').replace(/"$/, '');
-          // Substituir variáveis na mensagem
-          variables.forEach(variable => {
-            message = message.replace(new RegExp(`\\$${variable.name}`, 'g'), variable.value);
-          });
-          output += message + '\n';
-        });
-      }
-    }
+    const writeHostLines = processedScript.split('\n').filter(line => 
+      line.trim().startsWith('Write-Host')
+    );
     
-    return output || 'Script executado com sucesso!';
+    writeHostLines.forEach(line => {
+      // Extrair o conteúdo do Write-Host
+      let message = '';
+      
+      // Padrão para Write-Host "texto"$variavel ou Write-Host "texto:"$variavel
+      const match1 = line.match(/Write-Host\s+"([^"]*)"(\$\w+)?/);
+      if (match1) {
+        message = match1[1] || '';
+        const varRef = match1[2];
+        if (varRef) {
+          const varName = varRef.substring(1); // Remove o $
+          const varValue = scriptVariables[varName] || '';
+          message += varValue;
+        }
+      } else {
+        // Padrão alternativo para Write-Host $variavel
+        const match2 = line.match(/Write-Host\s+(\$\w+)/);
+        if (match2) {
+          const varName = match2[1].substring(1); // Remove o $
+          message = scriptVariables[varName] || '';
+        }
+      }
+      
+      output += message + '\n';
+    });
+    
+    return output.trim() || 'Script executado com sucesso!';
   };
 
   const copyToClipboard = (text: string) => {
