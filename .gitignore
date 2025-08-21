@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+/.vs/ps-script-manager/CopilotIndices/17.14.995.13737
+/.vs/ps-script-manager/FileContentIndex
+/.vs
