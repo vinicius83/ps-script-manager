@@ -86,6 +86,48 @@ Write-Host "Usuário $(usuario) criado com sucesso na empresa $(empresa)"`,
     setCurrentView('execute');
   };
 
+  const handleEditScript = (script: Script) => {
+    setEditingScript({
+      id: script.id,
+      name: script.name,
+      content: script.content,
+      description: script.description,
+      variables: script.variables
+    });
+    setCurrentView('create');
+  };
+
+  const handleDeleteScript = (scriptId: string) => {
+    setScripts(scripts.filter(script => script.id !== scriptId));
+    toast({
+      title: "Script deletado!",
+      description: "O script foi removido com sucesso",
+    });
+  };
+
+  const handleUpdateScript = () => {
+    const variables = extractVariables(editingScript.content || '');
+    const updatedScript: Script = {
+      id: editingScript.id!,
+      name: editingScript.name || 'Script Editado',
+      content: editingScript.content || '',
+      description: editingScript.description || '',
+      variables,
+      createdAt: new Date()
+    };
+
+    setScripts(scripts.map(script => 
+      script.id === editingScript.id ? updatedScript : script
+    ));
+    setEditingScript({});
+    setCurrentView('list');
+    
+    toast({
+      title: "Script atualizado com sucesso!",
+      description: `${variables.length} variáveis detectadas: ${variables.join(', ')}`,
+    });
+  };
+
   const handleRunScript = () => {
     if (!selectedScript) return;
 
@@ -126,7 +168,33 @@ Propriedades aplicadas:
 - UPN: ${usuario}@${empresa}.com
 - Status: Ativo`;
     }
-    return 'Script executado com sucesso!';
+    
+    // Para scripts de senha
+    if (script.content.includes('$Senha') || script.content.includes('senha')) {
+      const senha = variables.find(v => v.name === 'Senha')?.value;
+      if (senha) {
+        return `Senha: ${senha}`;
+      }
+    }
+    
+    // Simular saída baseada no conteúdo do script
+    let output = '';
+    if (script.content.includes('Write-Host')) {
+      // Extrair e simular comandos Write-Host
+      const writeHostMatches = script.content.match(/Write-Host\s+"([^"]+)"/g);
+      if (writeHostMatches) {
+        writeHostMatches.forEach(match => {
+          let message = match.replace(/Write-Host\s+"/, '').replace(/"$/, '');
+          // Substituir variáveis na mensagem
+          variables.forEach(variable => {
+            message = message.replace(new RegExp(`\\$${variable.name}`, 'g'), variable.value);
+          });
+          output += message + '\n';
+        });
+      }
+    }
+    
+    return output || 'Script executado com sucesso!';
   };
 
   const copyToClipboard = (text: string) => {
@@ -143,7 +211,7 @@ Propriedades aplicadas:
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <Code className="h-6 w-6 text-primary" />
-            <h1 className="text-2xl font-bold">Criar Novo Script</h1>
+            <h1 className="text-2xl font-bold">{editingScript.id ? 'Editar Script' : 'Criar Novo Script'}</h1>
           </div>
           <Button variant="outline" onClick={() => setCurrentView('list')}>
             Voltar
@@ -199,11 +267,14 @@ Propriedades aplicadas:
             )}
 
             <div className="flex space-x-3 pt-4">
-              <Button onClick={handleCreateScript} className="bg-gradient-primary hover:shadow-glow">
+              <Button 
+                onClick={editingScript.id ? handleUpdateScript : handleCreateScript} 
+                className="bg-gradient-primary hover:shadow-glow"
+              >
                 <Plus className="h-4 w-4 mr-2" />
-                Criar Script
+                {editingScript.id ? 'Atualizar Script' : 'Criar Script'}
               </Button>
-              <Button variant="outline" onClick={() => setCurrentView('list')}>
+              <Button variant="outline" onClick={() => { setEditingScript({}); setCurrentView('list'); }}>
                 Cancelar
               </Button>
             </div>
@@ -349,10 +420,18 @@ Propriedades aplicadas:
                   <Play className="h-4 w-4 mr-2" />
                   Executar
                 </Button>
-                <Button size="sm" variant="outline">
+                <Button 
+                  size="sm" 
+                  variant="outline" 
+                  onClick={() => handleEditScript(script)}
+                >
                   <Edit className="h-4 w-4" />
                 </Button>
-                <Button size="sm" variant="outline">
+                <Button 
+                  size="sm" 
+                  variant="outline" 
+                  onClick={() => handleDeleteScript(script.id)}
+                >
                   <Trash2 className="h-4 w-4" />
                 </Button>
               </div>
