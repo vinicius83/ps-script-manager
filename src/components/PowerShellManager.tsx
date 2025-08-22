@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Copy, Play, Plus, Edit, Trash2, Terminal, Code } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface Script {
   id: string;
@@ -24,24 +25,59 @@ interface VariableInput {
 
 const PowerShellManager = () => {
   const { toast } = useToast();
-  const [scripts, setScripts] = useState<Script[]>([
-    {
-      id: '1',
-      name: 'Criar Usuário AD',
-      content: `# Script para criar usuário no Active Directory
-New-ADUser -Name "$(nomeCompleto)" -SamAccountName "$(usuario)" -UserPrincipalName "$(usuario)@$(empresa).com" -Path "OU=Users,DC=$(empresa),DC=com" -AccountPassword (ConvertTo-SecureString "$(senhaInicial)" -AsPlainText -Force) -Enabled $true
-Write-Host "Usuário $(usuario) criado com sucesso na empresa $(empresa)"`,
-      description: 'Script para criar novos usuários no Active Directory',
-      variables: ['nomeCompleto', 'usuario', 'empresa', 'senhaInicial'],
-      createdAt: new Date()
-    }
-  ]);
-
+  const [scripts, setScripts] = useState<Script[]>([]);
   const [currentView, setCurrentView] = useState<'list' | 'create' | 'execute'>('list');
   const [selectedScript, setSelectedScript] = useState<Script | null>(null);
   const [editingScript, setEditingScript] = useState<Partial<Script>>({});
   const [executionVariables, setExecutionVariables] = useState<VariableInput[]>([]);
   const [executionResult, setExecutionResult] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Load scripts from database on component mount
+  useEffect(() => {
+    loadScripts();
+  }, []);
+
+  // Load scripts from Supabase
+  const loadScripts = async () => {
+    setIsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('scripts')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error loading scripts:', error);
+        toast({
+          title: "Erro",
+          description: "Falha ao carregar scripts do banco de dados",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const formattedScripts: Script[] = data.map(script => ({
+        id: script.id,
+        name: script.name,
+        content: script.content,
+        description: script.description || '',
+        variables: script.variables || [],
+        createdAt: new Date(script.created_at)
+      }));
+
+      setScripts(formattedScripts);
+    } catch (error) {
+      console.error('Error loading scripts:', error);
+      toast({
+        title: "Erro",
+        description: "Falha ao conectar com o banco de dados",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // Função para extrair variáveis do script
   const extractVariables = (scriptContent: string): string[] => {
@@ -56,25 +92,77 @@ Write-Host "Usuário $(usuario) criado com sucesso na empresa $(empresa)"`,
     return matches;
   };
 
-  const handleCreateScript = () => {
+  const handleCreateScript = async () => {
     const variables = extractVariables(editingScript.content || '');
-    const newScript: Script = {
-      id: Date.now().toString(),
-      name: editingScript.name || 'Novo Script',
-      content: editingScript.content || '',
-      description: editingScript.description || '',
-      variables,
-      createdAt: new Date()
-    };
-
-    setScripts([...scripts, newScript]);
-    setEditingScript({});
-    setCurrentView('list');
     
-    toast({
-      title: "Script criado com sucesso!",
-      description: `${variables.length} variáveis detectadas: ${variables.join(', ')}`,
-    });
+    if (!editingScript.name?.trim() || !editingScript.content?.trim()) {
+      toast({
+        title: "Erro",
+        description: "Nome e conteúdo do script são obrigatórios",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      if (editingScript.id) {
+        // Update existing script
+        const { error } = await supabase
+          .from('scripts')
+          .update({
+            name: editingScript.name,
+            content: editingScript.content,
+            description: editingScript.description || '',
+            variables: variables
+          })
+          .eq('id', editingScript.id);
+
+        if (error) {
+          throw error;
+        }
+
+        toast({
+          title: "Script atualizado com sucesso!",
+          description: `${variables.length} variáveis detectadas: ${variables.join(', ')}`,
+        });
+      } else {
+        // Create new script
+        const { error } = await supabase
+          .from('scripts')
+          .insert({
+            name: editingScript.name,
+            content: editingScript.content,
+            description: editingScript.description || '',
+            variables: variables
+          });
+
+        if (error) {
+          throw error;
+        }
+
+        toast({
+          title: "Script criado com sucesso!",
+          description: `${variables.length} variáveis detectadas: ${variables.join(', ')}`,
+        });
+      }
+
+      // Reload scripts and reset form
+      await loadScripts();
+      setEditingScript({});
+      setCurrentView('list');
+
+    } catch (error) {
+      console.error('Error saving script:', error);
+      toast({
+        title: "Erro",
+        description: "Falha ao salvar script no banco de dados",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleExecuteScript = (script: Script) => {
@@ -97,172 +185,84 @@ Write-Host "Usuário $(usuario) criado com sucesso na empresa $(empresa)"`,
     setCurrentView('create');
   };
 
-  const handleDeleteScript = (scriptId: string) => {
-    setScripts(scripts.filter(script => script.id !== scriptId));
-    toast({
-      title: "Script deletado!",
-      description: "O script foi removido com sucesso",
-    });
+  const handleDeleteScript = async (scriptId: string) => {
+    setIsLoading(true);
+    
+    try {
+      const { error } = await supabase
+        .from('scripts')
+        .delete()
+        .eq('id', scriptId);
+
+      if (error) {
+        throw error;
+      }
+
+      await loadScripts();
+      toast({
+        title: "Script deletado!",
+        description: "O script foi removido com sucesso",
+      });
+    } catch (error) {
+      console.error('Error deleting script:', error);
+      toast({
+        title: "Erro",
+        description: "Falha ao excluir script do banco de dados",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleUpdateScript = () => {
-    const variables = extractVariables(editingScript.content || '');
-    const updatedScript: Script = {
-      id: editingScript.id!,
-      name: editingScript.name || 'Script Editado',
-      content: editingScript.content || '',
-      description: editingScript.description || '',
-      variables,
-      createdAt: new Date()
-    };
-
-    setScripts(scripts.map(script => 
-      script.id === editingScript.id ? updatedScript : script
-    ));
-    setEditingScript({});
-    setCurrentView('list');
-    
-    toast({
-      title: "Script atualizado com sucesso!",
-      description: `${variables.length} variáveis detectadas: ${variables.join(', ')}`,
-    });
+    handleCreateScript(); // Same logic as create, but with existing ID
   };
 
-  const handleRunScript = () => {
+  // Execute script with real PowerShell
+  const handleRunScript = async () => {
     if (!selectedScript) return;
 
-    let processedScript = selectedScript.content;
-    
-    // Substituir variáveis pelos valores fornecidos
-    executionVariables.forEach(variable => {
-      const regex = new RegExp(`\\$\\(${variable.name}\\)`, 'g');
-      processedScript = processedScript.replace(regex, variable.value);
-    });
+    setIsLoading(true);
+    setExecutionResult('Executando script...\n');
 
-    // Simular execução do PowerShell
-    const simulatedResult = `PowerShell 7.4.0
-Copyright (c) Microsoft Corporation.
-
-PS C:\\> ${processedScript}
-
-${generateSimulatedOutput(selectedScript, executionVariables)}
-
-PS C:\\> `;
-
-    setExecutionResult(simulatedResult);
-    
-    toast({
-      title: "Script executado com sucesso!",
-      description: "Resultado disponível para cópia",
-    });
-  };
-
-  const generateSimulatedOutput = (script: Script, variables: VariableInput[]): string => {
-    if (script.name.includes('Usuário')) {
-      const usuario = variables.find(v => v.name === 'usuario')?.value || 'usuario';
-      const empresa = variables.find(v => v.name === 'empresa')?.value || 'empresa';
-      return `Usuário ${usuario} criado com sucesso na empresa ${empresa}
-Propriedades aplicadas:
-- Nome completo: ${variables.find(v => v.name === 'nomeCompleto')?.value || 'N/A'}
-- Login: ${usuario}
-- UPN: ${usuario}@${empresa}.com
-- Status: Ativo`;
-    }
-    
-    let processedScript = script.content;
-    
-    // Substituir variáveis dinâmicas pelos valores fornecidos
-    variables.forEach(variable => {
-      const regex = new RegExp(`\\$\\(${variable.name}\\)`, 'g');
-      processedScript = processedScript.replace(regex, variable.value);
-    });
-    
-    // Extrair atribuições de variáveis do script
-    const scriptVariables: { [key: string]: string } = {};
-    
-    // Processar atribuições simples
-    const assignmentMatches = processedScript.match(/\$(\w+)\s*=\s*"([^"]*)"/g);
-    if (assignmentMatches) {
-      assignmentMatches.forEach(match => {
-        const [, varName, varValue] = match.match(/\$(\w+)\s*=\s*"([^"]*)"/) || [];
-        if (varName && varValue !== undefined) {
-          scriptVariables[varName] = varValue;
+    try {
+      const { data, error } = await supabase.functions.invoke('execute-powershell', {
+        body: {
+          scriptContent: selectedScript.content,
+          variables: executionVariables
         }
       });
-    }
-    
-    // Processar comandos complexos como geração de senhas
-    const lines = processedScript.split('\n');
-    lines.forEach((line, index) => {
-      line = line.trim();
-      
-      // Detectar geração de senha aleatória
-      if (line.includes('-join') && line.includes('Get-Random') && line.includes('ForEach-Object')) {
-        const varMatch = line.match(/\$(\w+)\s*=/);
-        if (varMatch) {
-          const varName = varMatch[1];
-          
-          // Extrair o tamanho da senha
-          let length = 8; // padrão
-          const lengthMatch = processedScript.match(/\$length\s*=\s*(\d+)/);
-          if (lengthMatch) {
-            length = parseInt(lengthMatch[1]);
-          }
-          
-          // Gerar senha aleatória simulada
-          const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.!@#$%&*-_+=';
-          let randomPassword = '';
-          for (let i = 0; i < length; i++) {
-            randomPassword += chars[Math.floor(Math.random() * chars.length)];
-          }
-          
-          scriptVariables[varName] = randomPassword;
-        }
+
+      if (error) {
+        throw error;
       }
-      
-      // Processar outras atribuições com comandos
-      else if (line.includes('Get-Random') && line.includes('$')) {
-        const varMatch = line.match(/\$(\w+)\s*=/);
-        if (varMatch) {
-          const varName = varMatch[1];
-          scriptVariables[varName] = Math.floor(Math.random() * 1000).toString();
-        }
-      }
-    });
-    
-    // Simular saída dos comandos Write-Host
-    let output = '';
-    const writeHostLines = processedScript.split('\n').filter(line => 
-      line.trim().startsWith('Write-Host')
-    );
-    
-    writeHostLines.forEach(line => {
-      // Extrair o conteúdo do Write-Host
-      let message = '';
-      
-      // Padrão para Write-Host "texto"$variavel ou Write-Host "texto:"$variavel
-      const match1 = line.match(/Write-Host\s+"([^"]*)"(\$\w+)?/);
-      if (match1) {
-        message = match1[1] || '';
-        const varRef = match1[2];
-        if (varRef) {
-          const varName = varRef.substring(1); // Remove o $
-          const varValue = scriptVariables[varName] || '';
-          message += varValue;
-        }
+
+      if (data.success) {
+        setExecutionResult(data.output || 'Script executado com sucesso (sem output)');
+        toast({
+          title: "Script Executado",
+          description: "O script foi executado com sucesso!",
+        });
       } else {
-        // Padrão alternativo para Write-Host $variavel
-        const match2 = line.match(/Write-Host\s+(\$\w+)/);
-        if (match2) {
-          const varName = match2[1].substring(1); // Remove o $
-          message = scriptVariables[varName] || '';
-        }
+        setExecutionResult(`Erro na execução:\n${data.error || data.output}`);
+        toast({
+          title: "Erro na Execução",
+          description: "O script falhou durante a execução",
+          variant: "destructive",
+        });
       }
-      
-      output += message + '\n';
-    });
-    
-    return output.trim() || 'Script executado com sucesso!';
+    } catch (error) {
+      console.error('Error executing script:', error);
+      setExecutionResult(`Erro ao executar script:\n${error.message}`);
+      toast({
+        title: "Erro",
+        description: "Falha ao conectar com o servidor de execução",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const copyToClipboard = (text: string) => {
@@ -336,11 +336,12 @@ Propriedades aplicadas:
 
             <div className="flex space-x-3 pt-4">
               <Button 
-                onClick={editingScript.id ? handleUpdateScript : handleCreateScript} 
+                onClick={handleCreateScript} 
                 className="bg-gradient-primary hover:shadow-glow"
+                disabled={isLoading}
               >
                 <Plus className="h-4 w-4 mr-2" />
-                {editingScript.id ? 'Atualizar Script' : 'Criar Script'}
+                {isLoading ? 'Salvando...' : (editingScript.id ? 'Atualizar Script' : 'Criar Script')}
               </Button>
               <Button variant="outline" onClick={() => { setEditingScript({}); setCurrentView('list'); }}>
                 Cancelar
@@ -391,10 +392,10 @@ Propriedades aplicadas:
               <Button 
                 onClick={handleRunScript} 
                 className="w-full bg-gradient-primary hover:shadow-glow mt-6"
-                disabled={executionVariables.some(v => !v.value)}
+                disabled={executionVariables.some(v => !v.value) || isLoading}
               >
                 <Play className="h-4 w-4 mr-2" />
-                Executar Script
+                {isLoading ? 'Executando...' : 'Executar Script'}
               </Button>
             </div>
           </Card>
@@ -402,7 +403,7 @@ Propriedades aplicadas:
           <Card className="p-6 bg-gradient-card border-border shadow-card">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Resultado</h3>
-              {executionResult && (
+              {executionResult && !isLoading && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -449,78 +450,76 @@ Propriedades aplicadas:
         </Button>
       </div>
 
-      <div className="grid gap-6">
-        {scripts.map((script) => (
-          <Card key={script.id} className="p-6 bg-gradient-card border-border shadow-card hover:shadow-glow transition-all duration-300">
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <div className="flex items-center space-x-3 mb-2">
-                  <h3 className="text-xl font-semibold">{script.name}</h3>
-                  <Badge variant="outline" className="font-mono">
-                    {script.variables.length} variáveis
-                  </Badge>
-                </div>
-                
-                {script.description && (
-                  <p className="text-muted-foreground mb-3">{script.description}</p>
-                )}
-
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {script.variables.map((variable) => (
-                    <Badge key={variable} variant="secondary" className="font-mono text-xs">
-                      ${variable}
+      {isLoading && scripts.length === 0 ? (
+        <div className="text-center py-12">
+          <p className="text-muted-foreground">Carregando scripts...</p>
+        </div>
+      ) : scripts.length === 0 ? (
+        <div className="text-center py-12">
+          <Terminal className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+          <p className="text-xl text-muted-foreground mb-2">Nenhum script encontrado</p>
+          <p className="text-muted-foreground">Crie seu primeiro script PowerShell clicando no botão acima</p>
+        </div>
+      ) : (
+        <div className="grid gap-6">
+          {scripts.map((script) => (
+            <Card key={script.id} className="p-6 bg-gradient-card border-border shadow-card hover:shadow-glow transition-all duration-300">
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center space-x-3 mb-2">
+                    <h3 className="text-xl font-semibold">{script.name}</h3>
+                    <Badge variant="outline" className="font-mono">
+                      {script.variables.length} variáveis
                     </Badge>
-                  ))}
+                  </div>
+                  
+                  {script.description && (
+                    <p className="text-muted-foreground mb-3">{script.description}</p>
+                  )}
+
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {script.variables.map((variable) => (
+                      <Badge key={variable} variant="secondary" className="font-mono text-xs">
+                        ${variable}
+                      </Badge>
+                    ))}
+                  </div>
+
+                  <div className="bg-code-bg border border-border rounded-lg p-3 font-mono text-sm">
+                    <div className="text-muted-foreground mb-1"># {script.name}</div>
+                    <div className="line-clamp-3">{script.content}</div>
+                  </div>
                 </div>
 
-                <div className="bg-code-bg border border-border rounded-lg p-3 font-mono text-sm">
-                  <div className="text-muted-foreground mb-1"># {script.name}</div>
-                  <div className="line-clamp-3">{script.content}</div>
+                <div className="flex space-x-2 ml-4">
+                  <Button
+                    size="sm"
+                    onClick={() => handleExecuteScript(script)}
+                    className="bg-gradient-primary hover:shadow-glow"
+                  >
+                    <Play className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleEditScript(script)}
+                  >
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleDeleteScript(script.id)}
+                    disabled={isLoading}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
               </div>
-
-              <div className="flex space-x-2 ml-4">
-                <Button
-                  size="sm"
-                  onClick={() => handleExecuteScript(script)}
-                  className="bg-gradient-primary hover:shadow-glow"
-                >
-                  <Play className="h-4 w-4 mr-2" />
-                  Executar
-                </Button>
-                <Button 
-                  size="sm" 
-                  variant="outline" 
-                  onClick={() => handleEditScript(script)}
-                >
-                  <Edit className="h-4 w-4" />
-                </Button>
-                <Button 
-                  size="sm" 
-                  variant="outline" 
-                  onClick={() => handleDeleteScript(script.id)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          </Card>
-        ))}
-
-        {scripts.length === 0 && (
-          <Card className="p-12 text-center bg-gradient-card border-border shadow-card">
-            <Terminal className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-xl font-semibold mb-2">Nenhum script cadastrado</h3>
-            <p className="text-muted-foreground mb-6">
-              Comece criando seu primeiro script PowerShell com variáveis dinâmicas
-            </p>
-            <Button onClick={() => setCurrentView('create')} className="bg-gradient-primary hover:shadow-glow">
-              <Plus className="h-4 w-4 mr-2" />
-              Criar Primeiro Script
-            </Button>
-          </Card>
-        )}
-      </div>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

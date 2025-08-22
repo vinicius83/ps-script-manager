@@ -1,1 +1,4 @@
 project_id = "nkkauogbkgkjgxlrvfbe"
+
+[functions.execute-powershell]
+verify_jwt = false
